@@ -17,7 +17,7 @@ use crate::State;
 pub struct RequestMethod(pub hyper::Method);
 
 pub async fn metrics(Extension(recorder_handle): Extension<PrometheusHandle>, Extension(state): Extension<State>) -> Result<String, RestError> {
-    log::info!("{{\"fn\": \"metricshealth\", \"method\":\"get\"}}");
+    log::info!("{{\"fn\": \"metrics\", \"method\":\"get\"}}");
     state.get_metrics().await?;
     Ok(recorder_handle.render())
 }
