@@ -1,5 +1,5 @@
 use axum::{
-    extract::{OriginalUri},
+    extract::{OriginalUri, Extension},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -7,14 +7,20 @@ use axum::{
 use clap::{crate_description, crate_name, crate_version};
 use serde_json::json;
 use serde_json::Value;
+use metrics_exporter_prometheus::PrometheusHandle;
 
-//use crate::error::Error as RestError;
-//use crate::State;
+use crate::error::Error as RestError;
+use crate::State;
 
 // This is required in order to get the method from the request
 #[derive(Debug)]
 pub struct RequestMethod(pub hyper::Method);
 
+pub async fn metrics(Extension(recorder_handle): Extension<PrometheusHandle>, Extension(state): Extension<State>) -> Result<String, RestError> {
+    log::info!("{{\"fn\": \"metricshealth\", \"method\":\"get\"}}");
+    state.get_metrics().await?;
+    Ok(recorder_handle.render())
+}
 
 pub async fn health() -> Json<Value> {
     log::info!("{{\"fn\": \"health\", \"method\":\"get\"}}");

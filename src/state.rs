@@ -1,15 +1,81 @@
 use crate::https::HttpsClient;
 use clap::ArgMatches;
 use std::error::Error;
+use hyper::{Body, Request, Response};
+use serde_json::{Value};
+use url::Url;
+use serde::{Deserialize, Serialize};
 
 use crate::create_https_client;
-//use crate::error::Error as RestError;
+use crate::error::Error as RestError;
 
 type BoxResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Clone, Debug)]
 pub struct State {
     pub client: HttpsClient,
+    pub url: Url
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Groups {
+    pub links: Vec<Link>,
+    pub results: Vec<Group>,
+    pub total_count: u16
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+pub struct Link {
+    href: String,
+    rel: String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    cluster_count: u16,
+    created: String,
+    id: String,
+    links: Vec<Link>,
+    name: String,
+    org_id: String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseUsers {
+    pub links: Vec<Link>,
+    pub results: Vec<User>,
+    pub total_count: u16
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct User {
+    awsIAMType: String,
+    database_name: String,
+    group_id: String,
+    labels: Vec<Value>,
+    ldap_auth_type: String,
+    links: Vec<Link>,
+    roles: Vec<Role>,
+    scopes: Vec<Scope>,
+    username: String,
+    x509_type: String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Role {
+    database_name: String,
+    role_name: String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+pub struct Scope {
+    name: String,
+    r#type: String
 }
 
 impl State {
@@ -25,9 +91,97 @@ impl State {
             });
 
         let client = create_https_client(timeout)?;
+        let url = opts.value_of("proxy").unwrap().parse().expect("Could not parse url");
 
         Ok(State {
             client,
+            url
         })
+    }
+
+    pub async fn get(&self, path: &str) -> Result<Response<Body>, RestError> {
+
+        let uri = format!("{}/{}", &self.url, path);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(&uri)
+            .body(Body::empty())
+            .expect("request builder");
+
+        // Send initial request
+        let response = match self.client.request(req).await {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("{{\"error\":\"{}\"", e);
+                return Err(RestError::Hyper(e));
+            }
+        };
+
+        match response.status().as_u16() {
+            404 => return Err(RestError::NotFound),
+            403 => return Err(RestError::Forbidden),
+            401 => return Err(RestError::Unauthorized),
+            200 => {
+                Ok(response)
+            }
+            _ => {
+                log::error!(
+                    "Got bad status code getting config: {}",
+                    response.status().as_u16()
+                );
+                return Err(RestError::UnknownCode)
+            }
+        }
+    }
+
+    pub async fn get_metrics(&self) -> Result<(), RestError> {
+        let labels = [
+            ("method", "GET"),
+            ("fn", "get_metrics")
+        ];
+        metrics::increment_counter!("atlas_exporter_function_execute", &labels);
+
+        let body = self.get(&"groups").await?;
+        let bytes = hyper::body::to_bytes(body.into_body()).await?;
+        let body: Groups = serde_json::from_slice(&bytes)?;
+
+        log::debug!("groups: {:?}", body);
+
+        for group in body.results {
+            log::info!("Getting metrics for group: {}", group.name);
+            let path = format!("groups/{}/databaseUsers", group.id);
+            let body = self.get(&path).await?;
+            let bytes = hyper::body::to_bytes(body.into_body()).await?;
+            let database_users: DatabaseUsers = serde_json::from_slice(&bytes)?;
+
+            let labels = [
+                ("project", group.name.clone()),
+            ];
+            metrics::gauge!("atlas_exporter_project_users_total", database_users.results.len() as f64, &labels);
+
+            for user in database_users.results {
+                let scopes = match user.scopes.len() {
+                    0 => {
+                        let mut vec = Vec::new();
+                        let scope = Scope { name: "all".to_string(), r#type: "CLUSTER".to_string() };
+                        vec.push(scope);
+                        vec
+                    },
+                    _ => user.scopes.clone()
+                };
+
+                for scope in scopes {
+                    let labels = [
+                        ("username", user.username.clone()),
+                        ("project", group.name.clone()),
+                        ("scope", scope.name)
+                    ];
+                    metrics::gauge!("atlas_exporter_project_user", 1f64, &labels);
+                }
+
+            }
+        }
+        Ok(())
     }
 }

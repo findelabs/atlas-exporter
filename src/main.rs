@@ -1,14 +1,14 @@
 use axum::{
     handler::Handler,
     routing::{get, post},
-    AddExtensionLayer, Router,
+    Router,
+    extract::Extension
 };
 use axum_extra::middleware;
 use chrono::Local;
 use clap::{crate_name, crate_version, App, Arg};
 use env_logger::{Builder, Target};
 use log::LevelFilter;
-use std::future::ready;
 use std::io::Write;
 use std::net::SocketAddr;
 use tower_http::trace::TraceLayer;
@@ -20,7 +20,7 @@ mod metrics;
 mod state;
 
 use crate::metrics::{setup_metrics_recorder, track_metrics};
-use handlers::{echo, handler_404, health, help, root};
+use handlers::{echo, handler_404, health, help, root, metrics};
 use https::create_https_client;
 use state::State;
 
@@ -46,6 +46,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .help("Set default global timeout")
                 .default_value("60")
                 .env("RUST_API_TIMEOUT")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("proxy")
+                .short("p")
+                .long("proxy")
+                .help("Set atlas url via proxy")
+                .required(true)
+                .env("ATLAS_EXPORTER_PROXY_URL")
                 .takes_value(true),
         )
         .get_matches();
@@ -87,14 +96,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/health", get(health))
         .route("/echo", post(echo))
         .route("/help", get(help))
-        .route("/metrics", get(move || ready(recorder_handle.render())));
+        .route("/metrics", get(metrics));
 
     let app = Router::new()
         .merge(base)
         .merge(standard)
         .layer(TraceLayer::new_for_http())
         .route_layer(middleware::from_fn(track_metrics))
-        .layer(AddExtensionLayer::new(state));
+        .layer(Extension(state))
+        .layer(Extension(recorder_handle));
 
     // add a fallback service for handling routes to unknown paths
     let app = app.fallback(handler_404.into_service());
