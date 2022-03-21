@@ -245,8 +245,7 @@ impl State {
                                 Ok(status) => {
                                     let labels = [
                                             ("project", group.name.clone()),
-                                            ("cluster", cluster.name.clone()),
-                                            ("status", status.change_status.clone()),
+                                            ("cluster", cluster.name.clone())
                                     ];
                                     let change = match status.change_status.as_str() {
                                         "APPLIED" => 0,
