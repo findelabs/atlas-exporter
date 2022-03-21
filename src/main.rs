@@ -1,6 +1,6 @@
 use axum::{
     handler::Handler,
-    routing::{get, post},
+    routing::{get},
     Router,
     extract::Extension
 };
@@ -20,7 +20,7 @@ mod metrics;
 mod state;
 
 use crate::metrics::{setup_metrics_recorder, track_metrics};
-use handlers::{echo, handler_404, health, help, root, metrics};
+use handlers::{handler_404, health, help, root, metrics};
 use https::create_https_client;
 use state::State;
 
@@ -94,7 +94,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // These should NOT be authenticated
     let standard = Router::new()
         .route("/health", get(health))
-        .route("/echo", post(echo))
         .route("/help", get(help))
         .route("/metrics", get(metrics));
 

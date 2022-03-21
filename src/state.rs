@@ -5,6 +5,8 @@ use hyper::{Body, Request, Response};
 use serde_json::{Value};
 use url::Url;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use crate::create_https_client;
 use crate::error::Error as RestError;
@@ -99,6 +101,22 @@ impl State {
         })
     }
 
+    pub async fn get_users(&self, group: &str) -> Result<DatabaseUsers, RestError> {
+        let path = format!("groups/{}/databaseUsers?itemsPerPage=500", group);
+        let body = self.get(&path).await?;
+        let bytes = hyper::body::to_bytes(body.into_body()).await?;
+        let database_users: DatabaseUsers = serde_json::from_slice(&bytes)?;
+        Ok(database_users)
+    }
+
+    pub async fn get_groups(&self) -> Result<Groups, RestError> {
+        let path = format!("groups?itemsPerPage=500");
+        let body = self.get(&path).await?;
+        let bytes = hyper::body::to_bytes(body.into_body()).await?;
+        let database_users: Groups = serde_json::from_slice(&bytes)?;
+        Ok(database_users)
+    }
+
     pub async fn get(&self, path: &str) -> Result<Response<Body>, RestError> {
 
         let uri = format!("{}/{}", &self.url, path);
@@ -136,52 +154,56 @@ impl State {
     }
 
     pub async fn get_metrics(&self) -> Result<(), RestError> {
-        let labels = [
-            ("method", "GET"),
-            ("fn", "get_metrics")
-        ];
-        metrics::increment_counter!("atlas_exporter_function_execute", &labels);
-
-        let body = self.get(&"groups").await?;
-        let bytes = hyper::body::to_bytes(body.into_body()).await?;
-        let body: Groups = serde_json::from_slice(&bytes)?;
-
+        let body = self.get_groups().await?;
         log::debug!("groups: {:?}", body);
 
+        // Create semaphore and vec for handles
+        let sem = Arc::new(Semaphore::new(4));
+        let mut handles = vec![];
+
         for group in body.results {
-            log::info!("Getting metrics for group: {}", group.name);
-            let path = format!("groups/{}/databaseUsers", group.id);
-            let body = self.get(&path).await?;
-            let bytes = hyper::body::to_bytes(body.into_body()).await?;
-            let database_users: DatabaseUsers = serde_json::from_slice(&bytes)?;
+            // Get ticket
+            let permit = Arc::clone(&sem).acquire_owned().await;
+            let me = self.clone();
 
-            let labels = [
-                ("project", group.name.clone()),
-            ];
-            metrics::gauge!("atlas_exporter_project_users_total", database_users.results.len() as f64, &labels);
-
-            for user in database_users.results {
-                let scopes = match user.scopes.len() {
-                    0 => {
-                        let mut vec = Vec::new();
-                        let scope = Scope { name: "all".to_string(), r#type: "CLUSTER".to_string() };
-                        vec.push(scope);
-                        vec
+            handles.push(tokio::spawn(async move {
+                let _permit = permit;
+                log::info!("Getting metrics for group: {}", group.name);
+                match me.get_users(group.id.as_str()).await {
+                    Ok(database_users) => {
+                        let labels = [
+                            ("project", group.name.clone()),
+                        ];
+                        metrics::gauge!("atlas_exporter_project_users_total", database_users.results.len() as f64, &labels);
+                        for user in database_users.results {
+                            let scopes = match user.scopes.len() {
+                                0 => {
+                                    let mut vec = Vec::new();
+                                    let scope = Scope { name: "all".to_string(), r#type: "CLUSTER".to_string() };
+                                    vec.push(scope);
+                                    vec
+                                },
+                                _ => user.scopes.clone()
+                            };
+            
+                            for scope in scopes {
+                                let labels = [
+                                    ("username", user.username.clone()),
+                                    ("project", group.name.clone()),
+                                    ("scope", scope.name)
+                                ];
+                                metrics::gauge!("atlas_exporter_project_user", 1f64, &labels);
+                            }
+                        }
                     },
-                    _ => user.scopes.clone()
-                };
-
-                for scope in scopes {
-                    let labels = [
-                        ("username", user.username.clone()),
-                        ("project", group.name.clone()),
-                        ("scope", scope.name)
-                    ];
-                    metrics::gauge!("atlas_exporter_project_user", 1f64, &labels);
+                    Err(e) => log::error!("Error getting database users for {}: {}", group.name, e)
                 }
-
-            }
+            }));
         }
+        log::info!("Waiting for all futures to complete");
+        futures::future::join_all(handles).await;
+        log::info!("All futures have completed");
+
         Ok(())
     }
 }

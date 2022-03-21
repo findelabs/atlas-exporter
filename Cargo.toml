@@ -1,6 +1,6 @@
 [package]
 name = "atlas-exporter"
-version = "0.0.1"
+version = "0.0.2"
 description = "atlas-exporter"
 edition = "2021"
 
@@ -27,3 +27,4 @@ url = { version = "2", features = ["serde"] }
 metrics = "0.18"
 metrics-exporter-prometheus = "0.8"
 axum-extra = "0.1"
+futures = { version = "0.3.4", default-features = false, features = ["async-await"] }

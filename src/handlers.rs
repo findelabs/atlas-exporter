@@ -34,21 +34,12 @@ pub async fn root() -> Json<Value> {
     )
 }
 
-pub async fn echo(Json(payload): Json<Value>) -> Json<Value> {
-    log::info!("{{\"fn\": \"echo\", \"method\":\"post\"}}");
-    Json(payload)
-}
-
 pub async fn help() -> Json<Value> {
     log::info!("{{\"fn\": \"help\", \"method\":\"get\"}}");
     let payload = json!({"paths": {
             "/health": "Get the health of the api",
-            "/config": "Get config of api",
-            "/reload": "Reload the api's config",
-            "/echo": "Echo back json payload (debugging)",
-            "/help": "Show this help message",
-            "/:endpoint": "Show config for specific endpoint",
-            "/:endpoint/*path": "Pass through any request to specified endpoint"
+            "/metrics": "Get Atlas metrics",
+            "/help": "Show this help message"
         }
     });
     Json(payload)
