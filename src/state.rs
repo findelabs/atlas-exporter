@@ -19,7 +19,7 @@ pub struct State {
     pub url: Url
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Groups {
     pub links: Vec<Link>,
@@ -27,13 +27,13 @@ pub struct Groups {
     pub total_count: u16
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Link {
     href: String,
     rel: String
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Group {
     cluster_count: u16,
@@ -44,7 +44,7 @@ pub struct Group {
     org_id: String
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseUsers {
     pub links: Vec<Link>,
@@ -52,7 +52,28 @@ pub struct DatabaseUsers {
     pub total_count: u16
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Clusters {
+    pub links: Vec<Link>,
+    pub results: Vec<Cluster>,
+    pub total_count: u16
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Cluster {
+    name: String
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeStatus {
+    change_status: String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
     awsIAMType: String,
@@ -67,14 +88,14 @@ pub struct User {
     x509_type: String
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Role {
     database_name: String,
     role_name: String
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Scope {
     name: String,
     r#type: String
@@ -105,16 +126,32 @@ impl State {
         let path = format!("groups/{}/databaseUsers?itemsPerPage=500", group);
         let body = self.get(&path).await?;
         let bytes = hyper::body::to_bytes(body.into_body()).await?;
-        let database_users: DatabaseUsers = serde_json::from_slice(&bytes)?;
-        Ok(database_users)
+        let value: DatabaseUsers = serde_json::from_slice(&bytes)?;
+        Ok(value)
+    }
+
+    pub async fn get_clusters(&self, group: &str) -> Result<Clusters, RestError> {
+        let path = format!("groups/{}/clusters?itemsPerPage=500", group);
+        let body = self.get(&path).await?;
+        let bytes = hyper::body::to_bytes(body.into_body()).await?;
+        let value : Clusters = serde_json::from_slice(&bytes)?;
+        Ok(value)
+    }
+
+    pub async fn get_cluster_status(&self, group: &str, cluster: &str) -> Result<ChangeStatus, RestError> {
+        let path = format!("groups/{}/clusters/{}/status", group, cluster);
+        let body = self.get(&path).await?;
+        let bytes = hyper::body::to_bytes(body.into_body()).await?;
+        let value : ChangeStatus = serde_json::from_slice(&bytes)?;
+        Ok(value)
     }
 
     pub async fn get_groups(&self) -> Result<Groups, RestError> {
         let path = format!("groups?itemsPerPage=500");
         let body = self.get(&path).await?;
         let bytes = hyper::body::to_bytes(body.into_body()).await?;
-        let database_users: Groups = serde_json::from_slice(&bytes)?;
-        Ok(database_users)
+        let value : Groups = serde_json::from_slice(&bytes)?;
+        Ok(value)
     }
 
     pub async fn get(&self, path: &str) -> Result<Response<Body>, RestError> {
@@ -158,7 +195,7 @@ impl State {
         log::debug!("groups: {:?}", body);
 
         // Create semaphore and vec for handles
-        let sem = Arc::new(Semaphore::new(4));
+        let sem = Arc::new(Semaphore::new(8));
         let mut handles = vec![];
 
         for group in body.results {
@@ -169,6 +206,7 @@ impl State {
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 log::info!("Getting metrics for group: {}", group.name);
+
                 match me.get_users(group.id.as_str()).await {
                     Ok(database_users) => {
                         let labels = [
@@ -193,6 +231,31 @@ impl State {
                                     ("scope", scope.name)
                                 ];
                                 metrics::gauge!("atlas_exporter_project_user", 1f64, &labels);
+                            }
+                        }
+                    },
+                    Err(e) => log::error!("Error getting database users for {}: {}", group.name, e)
+                };
+
+                match me.get_clusters(group.id.as_str()).await {
+                    Ok(clusters) => {
+                        for cluster in clusters.results {
+                            log::info!("Getting cluster status for {}:{}", group.name, cluster.name);
+                            match me.get_cluster_status(group.id.as_str(), &cluster.name).await {
+                                Ok(status) => {
+                                    let labels = [
+                                            ("project", group.name.clone()),
+                                            ("cluster", cluster.name.clone()),
+                                            ("status", status.change_status.clone()),
+                                    ];
+                                    let change = match status.change_status.as_str() {
+                                        "APPLIED" => 0,
+                                        "PENDING" => 1,
+                                        _ => 2
+                                    };
+                                    metrics::gauge!("atlas_exporter_cluster_status", change as f64, &labels);
+                                },
+                                Err(e) => log::error!("Error getting cluster status for {}, {}: {}", group.name, cluster.name, e)
                             }
                         }
                     },
