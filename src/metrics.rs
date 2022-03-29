@@ -1,7 +1,9 @@
 use axum::{http::Request, response::IntoResponse};
 use axum_extra::middleware::Next;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use metrics_util::MetricKindMask;
 use std::time::Instant;
+use core::time::Duration;
 
 pub fn setup_metrics_recorder() -> PrometheusHandle {
     const EXPONENTIAL_SECONDS: &[f64] = &[
@@ -9,6 +11,10 @@ pub fn setup_metrics_recorder() -> PrometheusHandle {
     ];
 
     PrometheusBuilder::new()
+        .idle_timeout(
+            MetricKindMask::COUNTER,
+            Some(Duration::from_secs(10)),
+        )
         .set_buckets_for_metric(
             Matcher::Full("http_requests_duration_seconds".to_string()),
             EXPONENTIAL_SECONDS,
