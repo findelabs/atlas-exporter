@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-exporter"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "axum",
  "axum-extra",
