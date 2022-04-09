@@ -1,10 +1,10 @@
 use axum::{
+    middleware::self,
     handler::Handler,
     routing::{get},
     Router,
     extract::Extension
 };
-use axum_extra::middleware;
 use chrono::Local;
 use clap::{crate_name, crate_version, App, Arg};
 use env_logger::{Builder, Target};

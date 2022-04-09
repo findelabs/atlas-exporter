@@ -1,5 +1,4 @@
-use axum::{http::Request, response::IntoResponse};
-use axum_extra::middleware::Next;
+use axum::{http::Request, response::IntoResponse, middleware::Next};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use metrics_util::MetricKindMask;
 use std::time::Instant;
